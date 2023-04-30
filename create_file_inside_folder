@@ -1,0 +1,106 @@
+from fastapi import FastAPI
+from google.oauth2.credentials import Credentials
+from googleapiclient.errors import HttpError
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+# Konfigurasi kredensial Oauth
+SCOPES = ['https://www.googleapis.com/auth/drive']
+CLIENT_SECRET_FILE = 'client_secret_848310059846-m3j1ltsqheqg5sjpaigv6e2bst17s312.apps.googleusercontent.com.json'
+
+# membuat konektivitas dengan drive
+def create_drive_service():
+    """Membuat Drive service menggunakan kredensial Oauth"""
+    credentials = None
+    # Coba untuk memuat credentials dari file token.json
+    try:
+        credentials = Credentials.from_authorized_user_file('token.json', SCOPES)
+    except Exception as e:
+        print('Tidak dapat memuat kredensial Oauth: ' + str(e))
+    # Jika credentials belum ada, maka buat credentials dengan melakukan Oauth flow
+    # if not credentials or not credentials.valid:
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+            credentials = flow.run_local_server(port=63176)
+        # Simpan credentials yang berhasil dibuat ke file token.json
+        with open('token.json', 'w') as token:
+            token.write(credentials.to_json())
+    # Buat service Drive menggunakan credentials yang sudah di-load
+    drive_service = build('drive', 'v3', credentials=credentials)
+    return drive_service
+
+# Fungsi Memberikan List Folder dan File
+@app.get("/list_folders")
+async def list_folders():
+    """Menampilkan daftar folder pada Google Drive"""
+    # Buat service Drive menggunakan credentials yang sudah di-load
+    drive_service = create_drive_service()
+    
+    # Panggil API untuk mengambil daftar folder pada Google Drive
+    query = "mimeType='application/vnd.google-apps.folder'"
+    results = drive_service.files().list(
+        q=query,
+        fields="nextPageToken, files(id, name)"
+    ).execute()
+    
+    items = results.get("files", [])
+    if not items:
+        return JSONResponse(content={"message": "Tidak ada folder yang ditemukan."})
+    else:
+        folder_list = []
+        for item in items:
+            folder_list.append({"name": item["name"], "id": item["id"]})
+        return JSONResponse(content={"folders": folder_list})
+
+@app.post("/create_file_in_folder")
+async def create_file_in_folder(file_name: str, folder_id: str):
+    try:
+        # Build the Drive API client
+        drive_service = create_drive_service()
+
+         # Set the metadata for the new file
+        file_metadata = {'name': file_name, 'parents': [folder_id], 'mimeType': 'application/vnd.google-apps.document'}
+
+        # Create the file in the specified folder
+        file = drive_service.files().create(body=file_metadata).execute()
+
+        return {"message": "File created successfully with ID: %s" % file.get('id')}
+
+    except HttpError as error:
+        return {"error": f"An error occurred: {error}"}
+
+@app.post("/watch_create_file_in_folder")
+async def watch_create_file_in_folder(file_name: str, folder_id: str):
+    try:
+        # Build the Drive API client
+        drive_service = create_drive_service()
+
+         # Set the metadata for the new file
+        file_metadata = {'name': file_name, 'parents': [folder_id], 'mimeType': 'application/vnd.google-apps.document'}
+
+        # Create the file in the specified folder
+        file = drive_service.files().create(body=file_metadata).execute()
+
+        # Gunakan file_id yang baru dibuat sebagai nilai parameter fileId pada metode watch()
+        file_id = file.get('id')
+        body = {
+            'id': file_id,
+            'type': "web_hook",
+            'address': "https://eo5iykl420ws52e.m.pipedream.net"
+        }
+        watch = drive_service.files().watch(
+            fileId=file_id,
+            body=body
+        ).execute()
+
+        return {"message": "File created successfully with ID: %s" % file.get('id')}
+
+    except HttpError as error:
+        return {"error": f"An error occurred: {error}"}
